@@ -1,0 +1,184 @@
+---
+title: "Economic and Health Impact of Storms and Extreme Weather Events in USA"
+author: "Subramanya"
+date: "11/25/2017"
+output: 
+    html_document:
+        toc: true
+        toc_depth: 3
+        number_sections: true
+        theme: united
+        highlight: tango
+---
+
+# Synopsis
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.  
+
+The data for this assignment come in the form of a bz2-compressed, CSV file (~49 MB) with data from Years 1950 to 2011.   
+Dataset contains details of Event Type, Event Characteristics like Date/Time, Location, State & County, Affected Area Extent details, Damage details like Fatalities, Injuries, Property & Crop damages in $, Lat/Long etc.
+
+Data Analysis shall be performed is to answer questions like-  
+
+- Which weather events are most devastating in terms of Fatalities & Injuries
+- Which weather events cause most Property and Crop damage
+
+For the Analysis, the data is fetched, cleaned-up and summarized by Event Type.  
+
+Top-10 Events based on number of Fatalities & Injuries is obtained. Similarly, Top-10 Events that cause maximum Property and Crop Damage is also determined.
+
+We see that TORNADO's cause maximum Fatalities and Injuries, FLOODs cause highest Property damage and DROUGHT causes the maximum Crop damage.
+
+Details of the steps are provided hereunder.
+
+# Data Processing
+## Environment setup
+```{r warning=FALSE, error=TRUE, message=FALSE}
+library(data.table)     # for faster data reads
+library(dplyr)          # for Data manipulation verbs & magrittr
+library(R.utils)        # for bunzip2
+
+library(ggplot2)        # for graphs
+library(tibble)         # for efficient data frame
+```
+
+## Download Dataset
+```{r}
+url <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+dest.file <- "StormData.csv.bz2"
+file.to.read <- tools::file_path_sans_ext(dest.file)
+
+if (!file.exists(dest.file)){
+    download.file (url=url, destfile=dest.file, method="curl", quiet = FALSE)
+    bunzip2(dest.file, file.to.read, remove=FALSE, skip=TRUE)
+}
+```
+
+## Load Data
+```{r cache=TRUE}
+df <- fread(file.to.read, header=TRUE, stringsAsFactors = FALSE, data.table = FALSE)
+```
+
+# Exploratory Data Analysis
+## Dimensioning the Data
+```{r}
+dim(df)
+str(df)
+```
+We see that our data frame has 902297 observations and 37 columns.
+
+## Data Analysis
+Our initial question is centered around **"What are the Economic and Health Impacts of Extreme Weather Events?"**  
+
+From this, the following columns are of relevance to us-
+
+1. `EVTYPE` - Type of the Event (TORNADO, )
+1. `FATALITIES` - Provides Fatalities due to the event
+1. `INJURIES` - Injuries due to the event
+1. `PROPDMG` - Amount of Property Damage
+1. `PROPDMGEXP` - Exponent part. This needs to be appropriately multiplied with PROPDMG
+1. `CROPDMG` - Amount of Crop Damage
+1. `CROPDMGEXP` - Exponent part of Crop Damage Value
+
+We first need to create a proper Value component for Property Damage & Crop Damage
+Lets look at how the Damage & Exponent values are structured-
+
+```{r}
+summary(df$PROPDMG)
+
+summary(df$CROPDMG)
+
+unique(df$PROPDMGEXP)
+
+unique(df$CROPDMGEXP)
+```
+
+Note that Exponent values contains Numbers, Letters and Special Characters.  
+
+We can use numbers directly as 10^num. 'K' stands for 'Thousands', 'M' for 'Millions', 'H' for 'Hundreds', 'B' for 'Billions'. *There is no clear info on how to use special chars, so we will use exponent 0 to keep the value as is*
+
+There are 2 activities to do here-  
+
+1. Replace the Exponent part with a valid number for both `PROPDMGEXP` and `CROPDMGEXP`
+2. Create new variables `PROPDMGVAL` AND `CROPDMGVAL` that will hold the value
+
+## Data Cleaning & Transformation
+```{r}
+
+df[df$PROPDMGEXP == 'H' | df$PROPDMGEXP == 'h', "PROPDMGEXP"] <- 2
+df[df$PROPDMGEXP == 'K' | df$PROPDMGEXP == 'k', "PROPDMGEXP"] <- 3
+df[df$PROPDMGEXP == 'M' | df$PROPDMGEXP == 'm', "PROPDMGEXP"] <- 6
+df[df$PROPDMGEXP == 'B' | df$PROPDMGEXP == 'b', "PROPDMGEXP"] <- 9
+
+df[df$PROPDMGEXP == '+' | 
+           df$PROPDMGEXP == '?' | 
+           df$PROPDMGEXP == '-' |
+           df$PROPDMGEXP == '', "PROPDMGEXP"] <- 0
+
+df[df$CROPDMGEXP == 'H' | df$CROPDMGEXP == 'h', "CROPDMGEXP"] <- 2
+df[df$CROPDMGEXP == 'K' | df$CROPDMGEXP == 'k', "CROPDMGEXP"] <- 3
+df[df$CROPDMGEXP == 'M' | df$CROPDMGEXP == 'm', "CROPDMGEXP"] <- 6
+df[df$CROPDMGEXP == 'B' | df$CROPDMGEXP == 'b', "CROPDMGEXP"] <- 9
+
+df[df$CROPDMGEXP == '+' | 
+           df$CROPDMGEXP == '?' | 
+           df$CROPDMGEXP == '-' |
+           df$CROPDMGEXP == '', "CROPDMGEXP"] <- 0
+
+df$PROPDMGEXP <- as.integer(df$PROPDMGEXP)
+df$CROPDMGEXP <- as.integer(df$CROPDMGEXP)
+
+df <- df %>% mutate (PROPDMGVAL = PROPDMG * (10 ^ PROPDMGEXP))
+df <- df %>% mutate (CROPDMGVAL = CROPDMG * (10 ^ CROPDMGEXP))
+```
+
+## Graphs
+### Fatalities by Event Type
+Let us find aggregate the details of Fatalities by Event Type, pick and plot the Top-10 causes
+
+```{r}
+top10.fatalities <- df %>% select (EVTYPE, FATALITIES) %>% group_by(EVTYPE) %>% summarize(total=sum(FATALITIES)) %>% arrange(desc(total)) %>% slice(1:10)
+
+ggplot(data = top10.fatalities, aes(x=reorder(EVTYPE, total), y=total)) + 
+    geom_bar(stat="identity", fill="red") + 
+    labs(x="Event Type", y="# of Fatalities", title="Fatalities by Extreme Weather Events in USA") + 
+    ylim(0,6000) +
+    theme_bw() + 
+    coord_flip()
+```
+
+### Injuries by Event Type
+
+Let us find aggregate the details of Injuries by Event Type, pick and plot the Top-10 causes
+
+```{r}
+top10.injuries <- df %>% select (EVTYPE, INJURIES) %>% group_by(EVTYPE) %>% summarize(total=sum(INJURIES)) %>% arrange(desc(total)) %>% slice(1:10)
+
+ggplot(data = top10.injuries, aes(x=reorder(EVTYPE, total), y=total)) + 
+    geom_bar(stat="identity", fill="red") + 
+    labs(x="Event Type", y="# of Injuries", title="Injuries by Extreme Weather Events in USA") + 
+    ylim(0, 100000) +
+    theme_bw() + 
+    coord_flip()
+```
+
+
+### Crop & Property Damage
+
+```{r}
+top10.prop.damage <- df %>% select (EVTYPE, PROPDMGVAL) %>% group_by(EVTYPE) %>% summarize(total=sum(PROPDMGVAL)/1e9) %>% arrange(desc(total)) %>% slice(1:10)
+
+top10.crop.damage <- df %>% select (EVTYPE, CROPDMGVAL) %>% group_by(EVTYPE) %>% summarize(total=sum(CROPDMGVAL)/1e9) %>% arrange(desc(total)) %>% slice(1:10)
+
+# Plot the barplots side-by-side in a row
+par(mfrow= c(1,2), las=2, cex=0.8, mar = c(12, 4, 3, 2))
+
+barplot(height=top10.prop.damage$total, names.arg = top10.prop.damage$EVTYPE, col="pink", ylab="Damage (in Billion $)", main="Top-10 Property Damage Causes")
+
+barplot(height=top10.crop.damage$total, names.arg = top10.crop.damage$EVTYPE, col="lightblue", ylab="Damage (in $ Billion $)", main="Top-10 Crop Damage Causes")
+
+par(mfrow=c(1,1))
+```
+# Results
+1. From the graphs it is evident that TORNADO's and EXCESSIVE HEAT take the number 1 and 2 spots in inducing fatalities
+1. Again, TORNADO's occupy top-spot in inflicting injurires.
+1. FLOODs cause the maximum Property Damage and DROUGHT causes the maximum Crop Damage.
